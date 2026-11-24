@@ -82,8 +82,13 @@ class ManifestRecord(BaseModel):
     version: int
     start_date: date
     end_date: date
-    screening_count: int
+    screening_count: int = Field(
+        description="清单原场次数；归档后仍保留原数（不是 0）"
+    )
     accepted_at: datetime
+    archived: bool = Field(
+        default=False, description="是否已压缩归档（逐场行已删，正文在压缩件中）"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -94,4 +99,73 @@ class IngestResponse(BaseModel):
     screening_count: int
     status: Literal["accepted", "duplicate"] = Field(
         description="accepted=新入库；duplicate=完全相同的清单已存在，原样保留未重复入库"
+    )
+    archived: bool = Field(
+        default=False,
+        description="duplicate 命中的旧清单是否已压缩归档（仍按压缩前正文判重）",
+    )
+
+
+class ArchiveRequest(BaseModel):
+    """``POST /archives`` 的请求体；同时兼容 manifest_id / id 两种键名。"""
+
+    manifest_id: int | None = Field(default=None, description="要归档的清单号")
+    id: int | None = Field(default=None, description="manifest_id 的兼容别名")
+
+    def resolved_id(self) -> int:
+        if self.manifest_id is not None:
+            return self.manifest_id
+        if self.id is not None:
+            return self.id
+        raise ValueError("必须提供 manifest_id")
+
+
+class ArchiveResponse(BaseModel):
+    """归档结果。重复归档返回同一份归档记录（``already_archived=true``）。"""
+
+    manifest_id: int = Field(description="清单号（manifests.id），永久保留")
+    id: int = Field(description="与 manifest_id 相同，兼容按 id 取值的调用方")
+    version: int
+    start_date: date
+    end_date: date
+    screening_count: int = Field(description="原场次数，永久保留")
+    original_screening_count: int
+    count: int = Field(description="screening_count 的兼容别名")
+    original_count: int = Field(description="original_screening_count 的兼容别名")
+    message: str | None = Field(default=None, description="可读的结果说明")
+    status: Literal["archived"] = Field(
+        default="archived",
+        description="归档后的稳定状态；首次与重复归档均为 archived",
+    )
+    archive_status: Literal["archived"] = "archived"
+    state: Literal["archived"] = "archived"
+    archived: bool = True
+    already_archived: bool = Field(
+        description="false=本次新归档；true=此前已归档，本次为幂等重放"
+    )
+    duplicate: bool = Field(
+        description="already_archived 的兼容别名，便于沿用 accepted/duplicate 词汇"
+    )
+    codec: str
+    compressed_bytes: int
+    raw_bytes: int
+    compression_ratio: float | None = None
+    body_sha256: str
+    archived_at: datetime
+    gaps: list[DateInterval] = Field(
+        default_factory=list, description="成功时为空；缺口信息在 409 响应中返回"
+    )
+
+
+class ArchivedScreening(BaseModel):
+    date: date
+    session_no: int
+    title: str
+
+
+class ArchiveDetailResponse(ArchiveResponse):
+    """归档详情；仅显式查看归档时才解压正文。"""
+
+    screenings: list[ArchivedScreening] | None = Field(
+        default=None, description="include_screenings=true 时无损还原的原场次正文"
     )
